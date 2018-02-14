@@ -1,0 +1,322 @@
+---
+title: "Active Learning Workshop Part 2"
+author: "Bob Horton"
+date: "February 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, cache=TRUE, message=FALSE, warning=FALSE, fig.height=7.5)
+rxOptions(reportProgress=0)
+```
+
+# Classifying Wiki Detox Comments
+
+In the earlier part of the workshop, we used featurization and active learning to build a custom image classifier. Here we use the same approach for building a text classifier.
+
+```{r load_data}
+DATA_DIR <- "C:/Users/rhorton/Documents/conferences/StrataSJC2018/wiki_detox"
+
+DATA_TARGET <- "attack"  # "attack", "aggression", "toxicity"
+
+FEATURIZED_DATA_FILE <- sprintf("featurized_wiki_comments_%s.Rds", DATA_TARGET)
+# from "classify_wikipedia_comments.Rmd"
+```
+
+
+```{r parameters}
+
+### Libraries ###
+library(dplyr)
+library(ggplot2)
+library(pROC)
+
+source("active_learning_lib.R")
+
+### Meta-hyperparameters ###
+set.seed(4)
+
+USE_RX <- FALSE  # use rxLogisticRegression, otherwise randomForest
+
+if (USE_RX){
+  L1_PENALTY <- 1e-6
+  L2_PENALTY <- 1e-6
+  fit_and_evaluate_model <- fit_and_evaluate_model_rxLogisticRegression
+  plot_roc_history <- plot_roc_history_rxRoc
+} else {
+  fit_and_evaluate_model <- fit_and_evaluate_model_randomForest
+  plot_roc_history <- plot_roc_history_pROC
+}
+
+INITIAL_EXAMPLES_PER_CLASS <- 10  # cases from the labelled dataset used to train the initial model
+
+ADDITIONAL_CASES_TO_LABEL <- 30  # additional cases per iteration
+
+NUM_ITERATIONS <- 15
+
+MONTE_CARLO_SAMPLES <- 100  # Number of times to repeat random sampling of training cases for estimating p-values
+
+SAMPLE_BEFORE_SCORING <- FALSE  # Downsample unlabeled cases before scoring?
+
+FEATURIZED_DATA <- readRDS(FEATURIZED_DATA_FILE)
+FEATURIZED_DATA <- FEATURIZED_DATA[complete.cases(FEATURIZED_DATA),]
+
+in_labelled_set <- sample(c(TRUE, FALSE), nrow(FEATURIZED_DATA), prob=c(0.09, 0.91), replace=TRUE)
+
+labelled_data_df <- FEATURIZED_DATA[in_labelled_set,]
+unlabelled_data_df <- FEATURIZED_DATA[!in_labelled_set,]
+
+inputs <- grep("^V", names(labelled_data_df), value=TRUE)
+outcome <- "flagged"
+FORM <- formula(paste(outcome, paste(inputs, collapse="+"), sep="~"))
+
+
+```
+
+
+### Split labelled data into training and test sets
+
+```{r split_train_and_test_sets}
+
+initial_training_set <- labelled_data_df %>%
+  group_by(flagged) %>%
+  do(sample_n(., INITIAL_EXAMPLES_PER_CLASS)) %>%
+  ungroup %>%
+  as.data.frame
+
+test_set_ids <- setdiff(labelled_data_df$rev_id, initial_training_set$rev_id)
+TEST_SET <- labelled_data_df %>% filter(rev_id %in% test_set_ids)
+
+table(initial_training_set$flagged)
+
+table(TEST_SET$flagged)
+table(TEST_SET$flagged)/nrow(TEST_SET)
+```
+
+## Initial model
+
+First we build a model on the small number of examples in the initial training set, and test on the test data.
+
+### Fit model to initial training set
+
+```{r tune_and_train_model}
+initial_model_results <- fit_and_evaluate_model(initial_training_set)
+
+select_cases <- function(model, available_cases, N=ADDITIONAL_CASES_TO_LABEL){
+    NUM_TO_CLUSTER <- 1e4
+    
+    if (SAMPLE_BEFORE_SCORING)
+      available_cases <- available_cases[sample(1:nrow(available_cases), NUM_TO_CLUSTER),]
+    
+    if (USE_RX){
+        predictions_df <- rxPredict(model, available_cases, extraVarsToWrite=c("rev_id", "flagged"))
+    } else {
+      predictions_df <- tibble(
+        rev_id = available_cases$rev_id,
+        flagged = available_cases$flagged,
+        PredictedLabel = predict(model, available_cases, type="response") %>% as.logical,
+        Probability = predict(model, available_cases, type="prob")[,'TRUE']
+      )
+
+    }
+
+    predictions_df$entropy <- entropy(predictions_df$Probability)
+    
+    # Justin suggested to sample from the worst ones
+    predictions_df <- predictions_df %>%
+      arrange(-entropy) %>%
+      head(n=NUM_TO_CLUSTER)
+    
+    library('fastcluster')
+    
+    predictions_df$cluster_id <- predictions_df %>%
+      dist(method="euclidean") %>%
+      hclust(method="ward.D2") %>%
+      cutree(k=N)
+
+    selected <- predictions_df %>%
+      group_by(cluster_id) %>%
+      slice(which.max(entropy)) %>% # top_n(1, -entropy) %>%
+      as.data.frame
+   
+    return(selected)
+}   
+
+initial_model_results$selected <- select_cases(initial_model_results$model, unlabelled_data_df)
+
+```
+
+## Results for initial model
+
+### ROC curve
+
+```{r roc_curves}
+plot(initial_model_results$roc, print.auc=TRUE)
+
+```
+
+#### Confusion matrix
+
+```{r initial_model_confusion}
+
+initial_model_results$confusion
+
+```
+
+### Performance summary
+
+```{r initial_model_performance}
+initial_model_results$performance
+
+```
+
+### Histograms of class scores
+
+```{r class_score_histograms}
+
+plot_class_histograms(initial_model_results)
+
+```
+
+
+## Iterate modelling, case selection, and (pseudo) labelling
+
+These are the cases selected by the initial model for labelling:
+
+```{r initial_model_results_selected}
+initial_model_results$selected
+
+```
+
+```{r iterate}
+
+new_sample <- initial_model_results$selected %>% get_new_pseudolabelled_sample
+###??? why are there not the same nrows?
+
+current_training_set <- rbind(initial_training_set, new_sample[names(initial_training_set)])
+
+ALREADY_EVALUATED <- initial_model_results$selected$rev_id
+
+iteration_results <- lapply(1:NUM_ITERATIONS, function(i){
+  results <- fit_and_evaluate_model(current_training_set)
+  
+  candidate_cases <- unlabelled_data_df[(unlabelled_data_df$rev_id %in% setdiff(unlabelled_data_df$rev_id, ALREADY_EVALUATED)),]
+  results$selected <- select_cases(results$model, candidate_cases)
+
+  ALREADY_EVALUATED <<- c(ALREADY_EVALUATED, results$selected$rev_id)
+  results$selected_labelled <- results$selected  ### %>% pseudolabel_function
+  next_sample <- results$selected %>% get_new_pseudolabelled_sample
+  
+  current_training_set <<- rbind(current_training_set, next_sample[names(current_training_set)])
+
+  results
+})
+```
+
+These are the cases selected at each iteration, together with the scores produced by the model for that iteration.
+
+```{r iteration_results_selected}
+lapply(iteration_results, function(ires) ires$selected)
+```
+
+This shows the change in the metrics, with each row showing an iteration. The 'negentropy' metric is the negative entropy across all three class probabilities.
+
+```{r visualize_metrics_by_iteration}
+do.call("rbind", lapply(iteration_results, function(ires) ires$performance))
+
+```
+
+### Visualizing improvement for actively learned model
+
+
+```{r final_model}
+final_model_results <- iteration_results[[NUM_ITERATIONS]]
+```
+
+This series of ROC curves shows how performance changes with iterations of active learning.
+
+```{r visualizing_improvement, eval=TRUE}
+plot_roc_history(initial_model_results, iteration_results)
+
+```
+
+## Final model results
+### Confusion Matrix
+
+```{r final_model_confusion_matrix}
+final_model_results$confusion
+```
+
+### Performance summary
+
+Summary of performance using cases selected with active learning:
+
+```{r summary_of_preformance_using_selected_cases}
+
+(selected_sample_results <- final_model_results$performance)
+```
+
+### Histograms of class scores for final model
+
+```{r final_class_score_histograms}
+
+plot_class_histograms(final_model_results)
+
+```
+
+
+## Monte Carlo Estimation of P-values
+
+What is the probability that a set of randomly chosen cases would improve the performance of the model as much as the selected cases did? We'll add the same number of examples to the training set, except that now they will be randomly chosen. We'll repeat this sampling, training, and evaluation process `r MONTE_CARLO_SAMPLES` times, and see how many of those times we beat the performance of the selected cases.
+
+
+```{r bootstrap_probability}
+
+(N <- iteration_results[[NUM_ITERATIONS]]$tss - nrow(initial_training_set))
+
+available_cases <- unlabelled_data_df
+
+random_sample_results <- sapply(1:MONTE_CARLO_SAMPLES, function(i){
+  new_sample <- available_cases[sample(1:nrow(available_cases), N, replace=FALSE),]
+
+  training_set_new <- rbind(initial_training_set, new_sample[names(initial_training_set)])
+
+  fit_and_evaluate_model(training_set_new)$performance
+})
+
+```
+
+### P-values
+
+This table shows the number of times out of `r MONTE_CARLO_SAMPLES` tries that the randomly selected cases equalled or exceeded the performance of the actively learned cases for each metric. These numbers are estimated P-values in percent.
+
+```{r p_values}
+mapply ( 
+  function(metric) sum(random_sample_results[metric,] >= selected_sample_results[[metric]]), 
+  row.names(random_sample_results)
+)# / MONTE_CARLO_SAMPLES
+
+
+```
+
+## Model trained with all available "unlabelled" cases
+
+For comparison, we'll build a model as though we had gone through and labelled all `r nrow(available_cases)` of the usable new examples.
+
+```{r full_model_results}
+training_set_full <- rbind(initial_training_set, available_cases[names(initial_training_set)])
+
+full_model_results <- fit_and_evaluate_model(training_set_full)
+
+full_model_results$confusion
+
+full_model_results$performance
+
+plot(full_model_results$roc, print.auc=TRUE)
+lines(initial_model_results$roc, lty=2)
+lines(final_model_results$roc, col="blue", lty=2)
+
+plot_class_histograms(full_model_results)
+
+```
+
