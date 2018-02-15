@@ -7,7 +7,7 @@ Text data with labels:
 Labels were aggregated from multiple crowdworkers; if half or more of the people who labelled a comment thought it was an attack, we mark it 1; otherwise it is 0.
 
 Featurized dataset:
-[featurized_wiki_comments_attack.feather](https://activelearning.blob.core.windows.net/activelearningdemo/featurized_wiki_comments_attack.feather)
+[featurized_wiki_comments_attack_feather.zip](https://activelearning.blob.core.windows.net/activelearningdemo/featurized_wiki_comments_attack_feather.zip)
 
 Featurized dataset in zipped CSV format (in case you want to look at it in Excel):
 [featurized_wiki_comments_attack.zip](https://activelearning.blob.core.windows.net/activelearningdemo/featurized_wiki_comments_attack.zip)
