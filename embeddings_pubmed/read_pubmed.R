@@ -1,9 +1,36 @@
 library(tidyverse)
 library(data.table)
 
+
+# set up data path and import tsvs into single df -------------------------
+
+
 path <- "/datatwo/data/tatk/pubmed/"
 
+# TODO: data ingest and unnest is embarassingly parallel,
+# TODO: try use future / promises to run on multiple threads (furrr?)
 # read directoy of directories
+pubmed_sample <- data_frame(folders = dir(path, full.names = TRUE)) %>% 
+  # extract all the files in the subdirectories as a list
+  mutate(csvs = map(folders, dir, full.names = TRUE)) %>% 
+  # expand each list of files in the subdirectory to a new row
+  unnest(csvs) %>% 
+  # retain only the csvs
+  filter(str_detect(csvs, ".csv")) %>% 
+  # this ends up with 890 csv files, so sample if you want to limit size and time
+  sample_n(10) %>%
+  # read all of these tab separated values masquerading around like commas
+  mutate(dfs = map(csvs, read_tsv))
+
+
+# parallelize -------------------------------------------------------------
+
+
+# initial attempt at furrry analysis:
+# set up multisession plan for future and run map with future
+# hmm, can we select a batch size or is this doing online?
+library(future)
+plan(multisession)
 pubmed_dfs <- data_frame(folders = dir(path, full.names = TRUE)) %>% 
   # extract all the files in the subdirectories as a list
   mutate(csvs = map(folders, dir, full.names = TRUE)) %>% 
@@ -14,7 +41,11 @@ pubmed_dfs <- data_frame(folders = dir(path, full.names = TRUE)) %>%
   # this ends up with 890 csv files, so sample if you want to limit size and time
   # sample_n(10) %>%
   # read all of these tab separated values masquerading around like commas
-  mutate(dfs = map(csvs, read_tsv))
+  mutate(dfs = map(csvs, ~future(read_tsv)))
+
+
+# sanity checks before rbind ----------------------------------------------
+
 
 # verify they have same number of columns
 pubmed_dfs %>% 
@@ -32,6 +63,10 @@ pubmed_dfs %>%
 pubmed_dfs <- pubmed_dfs %>% 
   unnest(dfs)
 
+
+# create multi-label for mesh terms ---------------------------------------
+
+
 # extract and tabulate mesh terms
 pubmed_dfs <- pubmed_dfs %>%
   filter(csvs != "/datatwo/data/tatk/pubmed//pubmed18n0654.tsv/part-00000-28084333-87be-4df6-8ee6-9666e84f2404-c000.csv") %>% 
@@ -45,5 +80,9 @@ pubmed_dfs %>%
 
 # tweedie?
 pubmed_dfs %>% ggplot(aes(x = mesh_len, y = ..count..)) + geom_bar()
+
+
+# save final df for later -------------------------------------------------
+
 
 # saveRDS(pubmed_dfs, file = "pubmed_df.rds")
