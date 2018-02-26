@@ -1,14 +1,14 @@
 library(tidyverse)
 library(data.table)
-
+future::availableCores()
 
 # set up data path and import tsvs into single df -------------------------
 
 
 path <- "/datatwo/data/tatk/pubmed/"
 
-# TODO: data ingest and unnest is embarassingly parallel,
-# TODO: try use future / promises to run on multiple threads (furrr?)
+# DONE: data ingest and unnest is embarassingly parallel,
+# DONE: try use future / promises to run on multiple threads (furrr?)
 # read directoy of directories
 pubmed_sample <- data_frame(folders = dir(path, full.names = TRUE)) %>% 
   # extract all the files in the subdirectories as a list
@@ -27,10 +27,12 @@ pubmed_sample <- data_frame(folders = dir(path, full.names = TRUE)) %>%
 
 
 # initial attempt at furrry analysis:
-# set up multisession plan for future and run map with future
+# set up ~~multisession~~ multiprocess plan for future and run map with future
 # hmm, can we select a batch size or is this doing online?
 library(future)
-plan(multisession)
+# plan(multisession)
+# plan(multicore)
+plan(multiprocess)
 pubmed_dfs <- data_frame(folders = dir(path, full.names = TRUE)) %>% 
   # extract all the files in the subdirectories as a list
   mutate(csvs = map(folders, dir, full.names = TRUE)) %>% 
@@ -41,8 +43,7 @@ pubmed_dfs <- data_frame(folders = dir(path, full.names = TRUE)) %>%
   # this ends up with 890 csv files, so sample if you want to limit size and time
   # sample_n(10) %>%
   # read all of these tab separated values masquerading around like commas
-  mutate(dfs = map(csvs, ~future(read_tsv)))
-
+  mutate(dfs = map(csvs, ~future(read_tsv(.x))) %>% values)
 
 # sanity checks before rbind ----------------------------------------------
 
@@ -59,27 +60,28 @@ pubmed_dfs %>%
   filter(num_col < 4)
 # /datatwo/data/tatk/pubmed//pubmed18n0654.tsv/part-00000-28084333-87be-4df6-8ee6-9666e84f2404-c000.csv
 
-## unnest all dfs
+## remove bad kid and unnest all dfs
+## leads to 16 million rows
 pubmed_dfs <- pubmed_dfs %>% 
+  filter(csvs != "/datatwo/data/tatk/pubmed//pubmed18n0654.tsv/part-00000-28084333-87be-4df6-8ee6-9666e84f2404-c000.csv") %>% 
   unnest(dfs)
 
 
 # create multi-label for mesh terms ---------------------------------------
 
-
-# extract and tabulate mesh terms
+# extract and tabulate mesh terms, could also parallelize with future
 pubmed_dfs <- pubmed_dfs %>%
-  filter(csvs != "/datatwo/data/tatk/pubmed//pubmed18n0654.tsv/part-00000-28084333-87be-4df6-8ee6-9666e84f2404-c000.csv") %>% 
-  mutate(mesh_split = map(mesh_terms, str_split, pattern = "; ")) %>% 
+  mutate(mesh_split = map(mesh_terms, ~future(str_split(string = .x, pattern = "; "))) %>% values) %>%
   mutate(mesh_split = map(mesh_split, unlist),
-         mesh_len = map_int(mesh_split, length))
-
-
-pubmed_dfs %>%  
-  group_by(mesh_len) %>% tally
+         mesh_len = map_int(mesh_split, ~future(length(.x))) %>% values)
+         
 
 # tweedie?
-pubmed_dfs %>% ggplot(aes(x = mesh_len, y = ..count..)) + geom_bar()
+pubmed_dfs %>%  
+  group_by(mesh_len) %>% tally %>% 
+  ggplot(aes(x = mesh_len, y = n)) + geom_bar(stat = 'identity')
+
+# pubmed_dfs %>% ggplot(aes(x = mesh_len, y = ..count..)) + geom_bar()
 
 
 # save final df for later -------------------------------------------------
