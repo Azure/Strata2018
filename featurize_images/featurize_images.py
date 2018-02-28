@@ -1,5 +1,5 @@
 ##########################################################################################
-# Parallel kernel for featurization
+# Chapter 1: Using microsoftml to featurize images
 
 """
 The steps we want:
@@ -11,7 +11,6 @@ The steps we want:
 
 ####################################################################
 # identify where the data is
-
 
 storageAccount = "storage4tomasbatch";
 storageKey = "WpJqUKKq+8dgOGIXNlubRVrLu6vdNArNW9sE+cAGdwss1ETSb3P9ihjcSbFBQitAMs7RX/avXtGAYRORhuhHZA==";
@@ -93,5 +92,15 @@ feat = allfeat[featcolumns]
 plt.imshow(feat, cmap='hot')
 plt.show()
 
-###################################################################
-## Now do it in Spark
+##########################################################################################
+# Chapter 2: Using revoscalepy to bring that featurization to Spark.
+
+"""
+The steps we want:
+4) Place the dataset in the Spark cluster's local HDFS storage
+5) Define a Spark compute context
+6) Rewrite the "parallel kernel function" so that it does not depend on downloading 
+   the data on the local node using python code.
+7) Run the featurize function on Spark and get back a featurized dataframe
+"""
+
