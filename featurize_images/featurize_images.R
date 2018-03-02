@@ -9,14 +9,18 @@ install.packages(c("devtools", "curl", "httr"));
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
 devtools::install_github("Microsoft/AzureSMR");
 
-library(AzureSMR)   # AzureSMR is only needed on the head node - to list files in blob
+# add Microsoft goodness to path on the DSVMs
+#.libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
+#library(RevoScaleR)
+#library(MicrosoftML)
 
 
 ##########################################################################################
 ## Data locations, names, keys...
 
 storageAccount = "storage4tomasbatch";
-storageKey = "WpJqUKKq+8dgOGIXNlubRVrLu6vdNArNW9sE+cAGdwss1ETSb3P9ihjcSbFBQitAMs7RX/avXtGAYRORhuhHZA==";
+# for listing, rotate key after tutorial
+storageKey = "WpJqUKKq+8dgOGIXNlubRVrLu6vdNArNW9sE+cAGdwss1ETSb3P9ihjcSbFBQitAMs7RX/avXtGAYRORhuhHZA=="; 
 # container = "strata2018";
 container = "tutorial";
 BLOB_URL_BASE = paste0("https://", storageAccount, ".blob.core.windows.net/", container, '/');
@@ -28,6 +32,9 @@ FACES_SMALL_FEATURIZED_DATA='faces_small.Rds'
 
 ##########################################################################################
 ## list blob contents in a single directory and parse it into constituent parts
+
+library(AzureSMR)   # AzureSMR is only needed on the head node - to list files in blob
+
 get_blob_info <- function(storageAccount, storageKey, container, prefix) {
     marker = NULL;
     blob_info = NULL;
@@ -68,7 +75,6 @@ get_blob_info <- function(storageAccount, storageKey, container, prefix) {
 
 ##########################################################################################
 # Parallel kernel for featurization
-
 parallel_kernel <- function(blob_info) {
   
   library(MicrosoftML)
@@ -81,10 +87,13 @@ parallel_kernel <- function(blob_info) {
   # do this in paralell, too
   for (i in 1:nrow(blob_info)) {
     targetfile <- file.path(DATA_DIR, blob_info$fname[[i]]);
-    download.file(blob_info$url[[i]], destfile = targetfile, mode="wb")
+    if (!file.exists(targetfile)) {
+      download.file(blob_info$url[[i]], destfile = targetfile, mode="wb", quiet=TRUE)
+    }
   }
   
   blob_info$localname <- paste(DATA_DIR, sep='/', blob_info$fname);
+  # print(blob_info$localname)
   
   image_features <- rxFeaturize(data = blob_info,
                                 mlTransforms = list(loadImage(vars = list(Image = "localname")),
@@ -122,35 +131,46 @@ shardDataFrame <- function(df, shardcount) {
 
 
 ##########################################################################################
-## Featurize the faces dataset on a Spark cluster
+## Featurize the faces dataset
 
-# Get connection to Spark cluster.
-# 1. locally when running in the cluster's RStudio Server
-mySparkCluster <- rxSparkConnect()
-
-# 2. remotely
-mySparkCluster <- rxSparkConnect(sshUsername='sshuser',
-                                 sshHostname='stratbl;ob_infoa2018.azurehdinsight.net'
-                                 # , private/public key pair needs to be set up 
-                                 )
-
-# HDFS is running on top of blob storage, so contents of the blob is the same as that of HDFS
+# Get the list of images
 blob_info <- get_blob_info(storageAccount, storageKey, container, prefix = "faces_small");
 
-SLOTS=4 # parallelism level. We have 4 nodes. They have 8 cores each, but workload is multithreaded.
+# test that things work locally
+start_time <- Sys.time()
+output <- parallel_kernel(blob_info);
+end_time <- Sys.time()
+print(paste0("Local ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 
+SLOTS=4 # parallelism level. We have 4 nodes. They have 8 cores each, but workload is multithreaded.
 shards <- shardDataFrame(blob_info, SLOTS)      # create a list of dataframes, a uniform partition of blob_info
 
-# the first time you do it, you mau see a lot of installation (packages downloading, etc)
-# the next time it should be faster
-
-# run the featurization locally
-rxOptions(numCoresToUse=SLOTS);
+# run the featurization locally on singlecore
 rxSetComputeContext(RxLocalSeq());
 start_time <- Sys.time()
 outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
 end_time <- Sys.time()
-print(paste0("Sequential ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+print(paste0("Local sequential ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+## The sharding adds about 3 seconds to serial execution
+
+
+# run the featurization locally on multicore
+rxOptions(numCoresToUse=SLOTS);
+rxSetComputeContext(RxLocalParallel());
+start_time <- Sys.time()
+outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
+end_time <- Sys.time()
+print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+
+
+# Get connection to Spark cluster.
+# 1. locally when running in the cluster's RStudio Server
+mySparkCluster <- rxSparkConnect()
+# 2. remotely
+#mySparkCluster <- rxSparkConnect(sshUsername='sshuser',
+#                                 sshHostname='stratbl;ob_infoa2018.azurehdinsight.net'
+#                                  , private/public key pair needs to be set up 
+#                                 )
 
 # run the featurization on the cluster
 rxSetComputeContext(mySparkCluster);
@@ -281,7 +301,7 @@ if( file.exists(KNOTS_FEATURIZED_DATA)){
 ##########################################################################################
 ## Do something clever with it
 
-
+# What 
 
 
 
