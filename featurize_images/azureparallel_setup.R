@@ -3,16 +3,8 @@
 # Install required packages and dependencies
 install.packages(c("devtools", "dplyr", "tidyr", "ggplot2", "magrittr", "digest", "RCurl", "foreach"));
 
-## use old version of doAzureParallel
-remove.packages(c("Azure/rAzureBatch", "Azure/doAzureParallel"))
-devtools::install_github("Azure/rAzureBatch@v0.5.1")
-devtools::install_github("Azure/doAzureParallel@v0.5.1")
-
-## use new version of doAzureParallel
-remove.packages(c("rAzureBatch", "doAzureParallel"))
 devtools::install_github("Azure/rAzureBatch")
 devtools::install_github("Azure/doAzureParallel")
-
 
 # CRAN prerequisities for AzureSMR
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
@@ -42,18 +34,13 @@ library(doAzureParallel)
 setCredentials("credentials.json")
 
 # 4. Register the pool. This will create a new pool if your pool hasn't already been provisioned.
-cluster <- makeCluster("cluster_centos.json")   # 2 nodes 
-cluster2 <- makeCluster("cluster_large.json")   # 8+8 nodes
-cluster3 <- makeCluster("cluster_dsvm.json")    # 2 nodes
-cluster4 <- makeCluster("cluster_docker.json")   # 2 nodes 
+cluster <- makeCluster("cluster_docker.json")   # 2-12 nodes, elastic 
 
 ### Check your cluster in Azure Portal
 
 # 5. Register the pool as your parallel backend - one of these!
-# registerDoAzureParallel(cluster)  
-# registerDoAzureParallel(cluster2)
-# registerDoAzureParallel(cluster3)
-registerDoAzureParallel(cluster4)
+
+registerDoAzureParallel(cluster)
 
 # 6. Check that your parallel backend has been registered
 getDoParWorkers()
@@ -62,7 +49,3 @@ getDoParWorkers()
 
 # 7. Shut down so as not to burn through your Azure money
 stopCluster(cluster)
-stopCluster(cluster2)
-stopCluster(cluster3)
-stopCluster(cluster4)
-

@@ -217,7 +217,12 @@ print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, 
 # print(paste0("Spark ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 
 # Option 4: Run the featurization on Azure Batch, cheaper than the Spark cluster
-
+start_time <- Sys.time()
+outputs <- foreach(shard=shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
+  parallel_kernel(shard[[1]]) # shards are argument 1-tuples, kernel takes the element of the 1-tuple
+}
+end_time <- Sys.time()
+print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 
 
 # the output is a list of length SLOTS, collect back into one dataframe
