@@ -216,7 +216,8 @@ print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, 
 # end_time <- Sys.time()
 # print(paste0("Spark ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 
-# Option 4: Run the featurization in a Spark cluster
+# Option 4: Run the featurization on Azure Batch, cheaper than the Spark cluster
+
 
 
 # the output is a list of length SLOTS, collect back into one dataframe
@@ -263,7 +264,7 @@ get_caltech_info <- function(storageAccount, storageKey, container, prefix) {
     
     marker <- attr(info, 'marker');
     print(paste0("Have ", nrow(blob_info), " blobs"));
-    if (marker == "") {
+    if (marker == "" || TRUE) {
       break
     } else {
       print("Still more blobs to get")
@@ -274,10 +275,12 @@ get_caltech_info <- function(storageAccount, storageKey, container, prefix) {
   # preprocess the file names into urls and class (person) names
   blob_info$url <- paste(BLOB_URL_BASE, sep = '', blob_info$name)
   blob_info$fname <- sapply(strsplit(blob_info$name, '/'), function(l) { l[length(l)] })
-  blob_info$bname <- sapply(strsplit(blob_info$fname, ".", fixed = TRUE), function(l) l[1])
-  blob_info$pname <- sapply(strsplit(blob_info$name, '/'), function(l) { 
-                                  strsplit(l[2],'.')[2] # the second part of the "001.ak47" string, which is the second directory
-                            })
+  blob_info$bname <- sapply(strsplit(blob_info$fname, ".", fixed = TRUE), function(l) l[[1]])
+  blob_info$clsid <- sapply(strsplit(blob_info$name, '/'), function(l) { l[2] })
+  blob_info$cname <- sapply(strsplit(blob_info$clsid, ".", fixed = TRUE), 
+                            function(l) { l[2] }
+                            # the second part of the "001.ak47" string, which is the second directory
+                            );
   
   return(blob_info);
 }
@@ -290,13 +293,12 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
 } else {
 
   caltech_info <- get_caltech_info(storageAccount, storageKey, container, prefix = "256_ObjectCategories");
-
-  # Featurize Caltech on my 4 available local cores  
   
-  caltech_shards <- shardDataFrame(caltech_info, SLOTS)      
+  SLOTS = 25
+  caltech_shards <- shardDataFrame(caltech_info, SLOTS)
   start_time <- Sys.time()
   outputs <- foreach(shard=caltech_shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
-    parallel_kernel(shard)
+    parallel_kernel(shard[[1]]) # shards are argument 1-tuples, kernel takes the element of the 1-tuple
   }
   end_time <- Sys.time()
   print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
