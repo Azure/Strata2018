@@ -9,10 +9,16 @@ install.packages(c("devtools", "curl", "httr"));
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
 devtools::install_github("Microsoft/AzureSMR");
 
-# add Microsoft goodness to path on the DSVMs
-#.libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
-#library(RevoScaleR)
-#library(MicrosoftML)
+# Add Microsoft goodness to path on the DSVMs
+#
+# .libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
+# library(RevoScaleR)
+# library(MicrosoftML)
+#
+# The other method is to edit the config file before starting rstudio-server:
+# sudo echo r-libs-user=/data/mlserver/9.2.1/libraries/RServer >>/etc/rstudio/rsession.conf
+
+
 
 
 ##########################################################################################
@@ -28,7 +34,7 @@ BLOB_URL_BASE = paste0("https://", storageAccount, ".blob.core.windows.net/", co
 CALTECH_FEATURIZED_DATA='Caltech.Rds'
 KNOTS_FEATURIZED_DATA='knots.Rds'
 FACES_SMALL_FEATURIZED_DATA='faces_small.Rds'
-
+RSERVER_LIBS = "/data/mlserver/9.2.1/libraries/RServer"
 
 ##########################################################################################
 ## list blob contents in a single directory and parse it into constituent parts
@@ -73,12 +79,28 @@ get_blob_info <- function(storageAccount, storageKey, container, prefix) {
 }
 # end get_blob_info
 
+blob_info = data.frame(url=c("https://storage4tomasbatch.blob.core.windows.net/tutorial/faces_small/Aaron_Eckhart_0001.jpg",
+                             "https://storage4tomasbatch.blob.core.windows.net/tutorial/faces_small/Aaron_Guiel_0001.jpg"),
+                       name=c("faces_small/Aaron_Eckhart_0001.jpg", "faces_small/Aaron_Guiel_0001.jpg"),
+                       fname=c("Aaron_Eckhart_0001.jpg", "Aaron_Guiel_0001.jpg"),
+                       bname=c("Aaron_Eckhart_0001", "Aaron_Guiel_0001"),
+                       pname=c("Aaron_Eckhart", "Aaron Guiel"),
+                       stringsAsFactors = FALSE);
+
+
 ##########################################################################################
 # Parallel kernel for featurization
 parallel_kernel <- function(blob_info) {
   
+  # this ensures we will find the RServer libs on the DSVM
+  RSERVER_LIBS="/opt/microsoft/rclient/3.4.1/libraries/RServer";
+  if (!(RSERVER_LIBS %in% .libPaths() ) ) {
+   .libPaths( c(RSERVER_LIBS, .libPaths()))
+  }
+
   library(MicrosoftML)
   library(utils)
+  
   
   # get the images from blob and do them locally
   DATA_DIR <- file.path(getwd(), 'localdata');
@@ -88,7 +110,7 @@ parallel_kernel <- function(blob_info) {
   for (i in 1:nrow(blob_info)) {
     targetfile <- file.path(DATA_DIR, blob_info$fname[[i]]);
     if (!file.exists(targetfile)) {
-      download.file(blob_info$url[[i]], destfile = targetfile, mode="wb", quiet=TRUE)
+      download.file(blob_info$url[[i]], destfile = targetfile, mode="wb")
     }
   }
   
@@ -97,18 +119,36 @@ parallel_kernel <- function(blob_info) {
   
   image_features <- rxFeaturize(data = blob_info,
                                 mlTransforms = list(loadImage(vars = list(Image = "localname")),
-                                                    resizeImage(vars = list(Features = "Image"),
-                                                                width = 224, height = 224,
-                                                                resizingOption = "IsoPad"),
-                                                    extractPixels(vars = "Features"),
-                                                    featurizeImage(var = "Features",
-                                                                   dnnModel = 'resnet18')),
-                                mlTransformVars = c("localname"),
-                                reportProgress=1)
+                                                    resizeImage(vars = list(ResImage = "Image"),
+                                                                width = 224, height = 224),
+                                                    extractPixels(vars = list(Pixels = "ResImage"))
+                                                    , featurizeImage(var = "Pixels", dnnModel = 'resnet18')
+                                                    ),
+                                mlTransformVars = c("localname"))
   
   image_features$url <- blob_info$url;
   return(image_features)
 }
+
+##########################################################################################
+#### Run the parallel kernel
+
+BATCH_SIZE = 27;                            # 27 is two tasks per node on small dataset and small cluster
+# 14 is one tasks per node on small dataset and big cluster
+# larger batch size for larger dataset will defray overhead
+NO_BATCHES = ceiling(nrow(blob_info)/BATCH_SIZE);
+
+
+#### cluster execution
+start_time <- Sys.time()
+results <- foreach(i=1:NO_BATCHES ) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
+  N = nrow(blob_info);
+  fromRow = (i-1)*BATCH_SIZE+1;
+  toRow = min(i*BATCH_SIZE, N);
+  parallel_kernel(blob_info[fromRow:toRow,])
+}
+end_time <- Sys.time()
+print(paste0("Ran for ", as.numeric(end_time - start_time, units="secs"), " seconds"))
 
 ##########################################################################################
 ## Splitting the dataset for parallel run
@@ -136,7 +176,7 @@ shardDataFrame <- function(df, shardcount) {
 # Get the list of images
 blob_info <- get_blob_info(storageAccount, storageKey, container, prefix = "faces_small");
 
-# test that things work locally
+# Version 0: test that things work locally
 start_time <- Sys.time()
 output <- parallel_kernel(blob_info);
 end_time <- Sys.time()
@@ -145,7 +185,7 @@ print(paste0("Local ran for ", round(as.numeric(end_time - start_time, units="se
 SLOTS=4 # parallelism level. We have 4 nodes. They have 8 cores each, but workload is multithreaded.
 shards <- shardDataFrame(blob_info, SLOTS)      # create a list of dataframes, a uniform partition of blob_info
 
-# run the featurization locally on singlecore
+# Option 1: run the featurization locally on singlecore
 rxSetComputeContext(RxLocalSeq());
 start_time <- Sys.time()
 outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
@@ -154,30 +194,29 @@ print(paste0("Local sequential ran for ", round(as.numeric(end_time - start_time
 ## The sharding adds about 3 seconds to serial execution
 
 
-# run the featurization locally on multicore
+# Option 2: run the featurization locally on multicore
 rxOptions(numCoresToUse=SLOTS);
 rxSetComputeContext(RxLocalParallel());
 start_time <- Sys.time()
 outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
 end_time <- Sys.time()
 print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+## Actually slower. There is no benefit of parallelizing a multithreaded workload here, just overhead.
 
 
-# Get connection to Spark cluster.
-# 1. locally when running in the cluster's RStudio Server
-mySparkCluster <- rxSparkConnect()
-# 2. remotely
-#mySparkCluster <- rxSparkConnect(sshUsername='sshuser',
-#                                 sshHostname='stratbl;ob_infoa2018.azurehdinsight.net'
-#                                  , private/public key pair needs to be set up 
-#                                 )
-
+# Option 3: Run the featurization in a Spark cluster
+#
+#  locally when running in the cluster's RStudio Server
+# mySparkCluster <- rxSparkConnect()
+#
 # run the featurization on the cluster
-rxSetComputeContext(mySparkCluster);
-start_time <- Sys.time()
-outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
-end_time <- Sys.time()
-print(paste0("Spark ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+# rxSetComputeContext(mySparkCluster);
+# start_time <- Sys.time()
+# outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
+# end_time <- Sys.time()
+# print(paste0("Spark ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+
+# Option 4: Run the featurization in a Spark cluster
 
 
 # the output is a list of length SLOTS, collect back into one dataframe
@@ -243,7 +282,7 @@ get_caltech_info <- function(storageAccount, storageKey, container, prefix) {
   return(blob_info);
 }
 
-### load or make featurized data
+### load or make featurized data, on Azure Batch
 if( file.exists(CALTECH_FEATURIZED_DATA)){
   
   caltech_df <- readRDS(CALTECH_FEATURIZED_DATA)
@@ -254,15 +293,13 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
 
   # Featurize Caltech on my 4 available local cores  
   
-  SLOTS=4
-  rxOptions(numCoresToUse=SLOTS);
-  rxSetComputeContext(RxLocalParallel());
-  
   caltech_shards <- shardDataFrame(caltech_info, SLOTS)      
   start_time <- Sys.time()
-  outputs <- rxExec(FUN=parallel_kernel, elemArgs=caltech_shards)
+  outputs <- foreach(shard=caltech_shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
+    parallel_kernel(shard)
+  }
   end_time <- Sys.time()
-  print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+  print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
   caltech_df <- Reduce(rbind, outputs)
  
   saveRDS(caltech_df, CALTECH_FEATURIZED_DATA);
@@ -272,6 +309,7 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
 ##########################################################################################
 ## Knots dataset
 
+### load or make featurized data, on local multicore
 if( file.exists(KNOTS_FEATURIZED_DATA)){
   
   knots_df <- readRDS(KNOTS_FEATURIZED_DATA)
@@ -301,7 +339,8 @@ if( file.exists(KNOTS_FEATURIZED_DATA)){
 ##########################################################################################
 ## Do something clever with it
 
-# What 
+# What does this woodknot look like?
+# Find the thing in the Caltech dataset that is the closest in L1 sense and show it
 
 
 
