@@ -3,7 +3,7 @@
 ##########################################################################################
 #### Environment setup
 
-install.packages(c("devtools", "curl", "httr"));
+install.packages(c("devtools", "curl", "httr", "imager"));
 
 # CRAN prerequisities for AzureSMR
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
@@ -34,7 +34,6 @@ BLOB_URL_BASE = paste0("https://", storageAccount, ".blob.core.windows.net/", co
 CALTECH_FEATURIZED_DATA='Caltech.Rds'
 KNOTS_FEATURIZED_DATA='knots.Rds'
 FACES_SMALL_FEATURIZED_DATA='faces_small.Rds'
-RSERVER_LIBS = "/data/mlserver/9.2.1/libraries/RServer"
 
 ##########################################################################################
 ## list blob contents in a single directory and parse it into constituent parts
@@ -79,14 +78,6 @@ get_blob_info <- function(storageAccount, storageKey, container, prefix) {
 }
 # end get_blob_info
 
-blob_info = data.frame(url=c("https://storage4tomasbatch.blob.core.windows.net/tutorial/faces_small/Aaron_Eckhart_0001.jpg",
-                             "https://storage4tomasbatch.blob.core.windows.net/tutorial/faces_small/Aaron_Guiel_0001.jpg"),
-                       name=c("faces_small/Aaron_Eckhart_0001.jpg", "faces_small/Aaron_Guiel_0001.jpg"),
-                       fname=c("Aaron_Eckhart_0001.jpg", "Aaron_Guiel_0001.jpg"),
-                       bname=c("Aaron_Eckhart_0001", "Aaron_Guiel_0001"),
-                       pname=c("Aaron_Eckhart", "Aaron Guiel"),
-                       stringsAsFactors = FALSE);
-
 
 ##########################################################################################
 # Parallel kernel for featurization
@@ -100,7 +91,6 @@ parallel_kernel <- function(blob_info) {
 
   library(MicrosoftML)
   library(utils)
-  
   
   # get the images from blob and do them locally
   DATA_DIR <- file.path(getwd(), 'localdata');
@@ -269,7 +259,7 @@ get_caltech_info <- function(storageAccount, storageKey, container, prefix) {
     
     marker <- attr(info, 'marker');
     print(paste0("Have ", nrow(blob_info), " blobs"));
-    if (marker == "" || TRUE) {
+    if (marker == "") {
       break
     } else {
       print("Still more blobs to get")
@@ -326,7 +316,7 @@ if( file.exists(KNOTS_FEATURIZED_DATA)){
   knots_info <- get_blob_info(storageAccount, storageKey, container, prefix = "knot_images_png");
 
   # Featurize Caltech on my 6 local cores  
-  SLOTS=6 
+  SLOTS=4 
   rxOptions(numCoresToUse=SLOTS);
   rxSetComputeContext(RxLocalParallel());
 
@@ -344,11 +334,75 @@ if( file.exists(KNOTS_FEATURIZED_DATA)){
 
 
 ##########################################################################################
-## Do something clever with it
+## Featurization maps disparate images into the same space
+
+dim(caltech_df)
+dim(knots_df)
 
 # What does this woodknot look like?
-# Find the thing in the Caltech dataset that is the closest in L1 sense and show it
+# Find the thing in the Caltech dataset that is the closest in L1 sense and show it.
+# Returns the row from dataset_df that is closest to single_row_df
+# in the L1 sense. Columns must match in dataset_df and single_row_df.
+#
+# This is a table scan. I don't know anything about clever indexing 
+# and table scans sell cloud compute.
+find_L1_closest <- function (dataset_df, single_row_df) {
+  
+  numdf <- dplyr::select_if(dataset_df,is.numeric);
+  single <- dplyr::select_if(single_row_df,is.numeric);
+  
+  N = nrow(numdf);
+  diffs <- sweep(numdf, 2, as.numeric(single), "-");
+  numdf$l1 <- rowSums(abs(diffs));
+  closest <- which(numdf$l1 == min(numdf$l1));
+  
+  return( dataset_df[closest,])
+  
+}
 
+showurl <- function(url) {
+  if (is.list(url)) {
+    if (length(url) > 1) {
+      print("Warning: only one url will be shown")
+    }
+    oneurl <- url[[1]]
+  } else {
+    oneurl <- url;
+  }
+  
+  urlpieces <- strsplit(oneurl, '/')[[1]];
+  
+  DATA_DIR <- file.path(getwd(), 'localdata');
+  if(!dir.exists(DATA_DIR)) dir.create(DATA_DIR);
+  
+  targetfile <- file.path(DATA_DIR, urlpieces[[length(urlpieces)]]);
+  print(targetfile)
+  
+  download.file(url, destfile = targetfile, mode="wb");
+  i <- load.image(targetfile)
+  cls <- urlpieces[length(urlpieces) - 1]
+  plot(i, main=cls)
+}
+
+
+library(imager)
+library(dplyr)
+
+# show a woodknot
+WHICH_KNOT=10
+showurl(knots_df[WHICH_KNOT,"url"])
+
+lookslike <- find_L1_closest(caltech_df, knots_df[WHICH_KNOT, ])
+showurl(lookslike$url)
+# All the knots look like a coin....
+
+WHICH_FACE=21
+showurl(faces_small_df[WHICH_FACE,"url"])
+
+lookslike <- find_L1_closest(caltech_df, faces_small_df[WHICH_FACE, ])
+showurl(lookslike$url)
+
+# OMG that lookup was slow.... Hey, I have a cluster!
 
 
 
