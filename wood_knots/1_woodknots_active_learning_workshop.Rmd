@@ -1,7 +1,5 @@
 ---
-title: "Active Learning Workshop"
-author: "Bob Horton"
-date: "November 21, 2017"
+title: "Active Learning for Image Classification"
 output: html_document
 ---
 
@@ -33,11 +31,9 @@ L2_PENALTY <- 1e-2
 
 INITIAL_EXAMPLES_PER_CLASS <- 6  # cases from the labelled dataset used to train the initial model
 
-BALANCE_CLASSES <- TRUE  # should we try to pick some cases from each of the three classes?
+ADDITIONAL_CASES_TO_LABEL <- 12  # cases to label per iteration
 
-ADDITIONAL_CASES_TO_LABEL <- 12  # cases per class if BALANCE_CLASSES is TRUE
-
-NUM_ITERATIONS <- 10
+NUM_ITERATIONS <- 15 # 10
 
 MONTE_CARLO_SAMPLES <- 100
 
@@ -76,11 +72,6 @@ table(initial_training_set$knot_class)
 table(TEST_SET$knot_class)
 table(TEST_SET$knot_class)/nrow(TEST_SET)
 ```
-```{r save_training_and_test_sets}
-saveRDS(TEST_SET, "data/test_set.Rds")
-saveRDS(initial_training_set, "data/initial_training_set.Rds")
-
-```
 
 
 ## Initial model for knot classes
@@ -96,36 +87,24 @@ pseudolabel_function <- get_pseudolabelling_function(PSEUDOLABELS_FILE, KNOT_CLA
 
 initial_model_results <- fit_and_evaluate_model(initial_training_set)
 
-# still_unlabelled <- setdiff(unlabelled_knot_data_df$path, been_there)
-# unlabelled_df <- unlabelled_knot_data_df[unlabelled_knot_data_df$path %in% still_unlabelled,]
+select_cases <- function(model, available_cases, N=ADDITIONAL_CASES_TO_LABEL){
+  predictions_df <- rxPredict(model, available_cases, extraVarsToWrite=c("path"))
+  names(predictions_df) <- c("path", "pred_class", "sound_knot", "dry_knot", "encased_knot")
+  
+  predictions_df$cluster_id <- available_cases %>%
+    dist(method="euclidean") %>%
+    hclust(method="ward.D2") %>%
+    cutree(k=N)
 
-select_cases <- function(model, available_cases, N=ADDITIONAL_CASES_TO_LABEL, balance_classes=BALANCE_CLASSES){
-    predictions_df <- rxPredict(model, available_cases, extraVarsToWrite=c("path"))
-    names(predictions_df) <- c("path", "pred_class", "sound_knot", "dry_knot", "encased_knot")
-    
-    selected <- predictions_df %>%
-      mutate(entropy=entropy(sound_knot, dry_knot)) %>%
-      mutate(max_prob=apply(cbind(sound_knot, dry_knot, encased_knot), 1, max)) %>%
-      arrange(-entropy)  # -entropy  max_prob
-    
-    if (balance_classes){
-      predictions_df$cluster_id <- available_cases %>%
-        dist(method="euclidean") %>%
-        hclust(method="ward.D2") %>%
-        cutree(k=N)
+  selected <- predictions_df %>%
+    mutate(entropy=entropy(sound_knot, dry_knot)) %>%
+    group_by(cluster_id) %>%
+    arrange(-entropy) %>%
+    slice(which.max(entropy)) %>%
+    as.data.frame
  
-      selected <- predictions_df %>%
-        mutate(entropy=entropy(sound_knot, dry_knot)) %>%
-        # mutate(max_prob=apply(cbind(sound_knot, dry_knot, encased_knot), 1, max)) %>%
-        group_by(cluster_id) %>%
-        # arrange(-entropy) %>% # max_prob
-        filter(entropy==max(entropy)) %>%
-        as.data.frame
-     
-      return(selected)
-    } else{
-      return(head(selected, n=N))
-    }
+  return(selected)
+
 }   
 
 initial_model_results$selected <- select_cases(initial_model_results$model, unlabelled_knot_data_df)
@@ -138,9 +117,7 @@ initial_model_results$selected <- select_cases(initial_model_results$model, unla
 ### ROC curves
 
 ```{r roc_curves}
-# op <- par(mfrow=c(3,1), no.readonly = TRUE)
 mapply(plot, x=initial_model_results$roc_list, main=names(initial_model_results$roc_list), print.auc=TRUE) %>% invisible
-# par(op)
 ```
 
 #### Confusion matrix
@@ -208,6 +185,12 @@ iteration_results <- lapply(1:NUM_ITERATIONS, function(i){
 
   results
 })
+```
+
+
+```{r mean_entropy_of_selected_cases_by_iteration}
+mean_entropy <- sapply(iteration_results, function(ires) mean(ires$selected$entropy))
+plot(mean_entropy, type='l', main="mean entropy of selected cases by iteration")
 ```
 
 These are the cases selected at each iteration, together with the scores produced by the model for that iteration. The `knot_class` column was added by the pseudolabelling function.
@@ -288,32 +271,27 @@ random_sample_results <- sapply(1:MONTE_CARLO_SAMPLES, function(i){
   training_set_new <- rbind(initial_training_set, new_sample[names(initial_training_set)])
 
   fit_and_evaluate_model(training_set_new)$performance
-})
+}) %>% t %>% as.data.frame
 
 ```
-
-
-```{r save_random_sample_results}
-saveRDS(random_sample_results, sprintf("data/random_sample_results_iteration%02d.Rds", NUM_ITERATIONS))
-```
-
 
 ### P-values
 
 This table shows the fraction of times out of `r MONTE_CARLO_SAMPLES` tries that the randomly selected cases equalled or exceeded the performance of the actively learned cases for each metric. These numbers are estimated P-values.
 
 ```{r p_values}
+
 mapply ( 
-  function(metric) sum(random_sample_results[metric,] >= selected_sample_results[[metric]]), 
-  row.names(random_sample_results)
+  function(metric) sum(random_sample_results[[metric]] >= selected_sample_results[[metric]]), 
+  colnames(random_sample_results)
 ) / MONTE_CARLO_SAMPLES
 
 
 ```
 
-## Model trained with all available "unlabelled" cases
+## Model trained with all available "unlabeled" cases
 
-For comparison, we'll build a model as though we had gone through and labelled all `r nrow(available_cases)` of the useable new examples.
+For comparison, we'll build a model as though we had gone through and labeled all `r nrow(available_cases)` of the usable new examples.
 
 ```{r full_model_results}
 training_set_full <- rbind(initial_training_set, available_cases[names(initial_training_set)])
@@ -328,8 +306,4 @@ plot_class_histograms(full_model_results$test_predictions)
 
 plot_class_separation(full_model_results$test_predictions)
 
-```
-```{r save_training_set_full}
-# saveRDS(training_set_full, "data/training_set_full.Rds")
-# saveRDS(test_set, "data/test_set.Rds")
 ```
