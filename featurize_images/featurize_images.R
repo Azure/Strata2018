@@ -1,4 +1,4 @@
-## This script featurizes a large number of images, using the FACES dataset, on Spark
+## This script featurizes a large number of images, on Azure Batch
 
 ##########################################################################################
 #### Environment setup
@@ -9,7 +9,7 @@ install.packages(c("devtools", "curl", "httr", "imager"));
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
 devtools::install_github("Microsoft/AzureSMR");
 
-# Add Microsoft goodness to path on the DSVMs
+# Participants: Add Microsoft goodness to path on the DSVMs
 #
 # .libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
 # library(RevoScaleR)
@@ -19,6 +19,7 @@ devtools::install_github("Microsoft/AzureSMR");
 # sudo echo r-libs-user=/data/mlserver/9.2.1/libraries/RServer >>/etc/rstudio/rsession.conf
 
 
+# Now follow azureparallel_setup to start a Batch cluster.
 
 
 ##########################################################################################
@@ -27,7 +28,6 @@ devtools::install_github("Microsoft/AzureSMR");
 storageAccount = "storage4tomasbatch";
 # for listing, rotate key after tutorial
 storageKey = "WpJqUKKq+8dgOGIXNlubRVrLu6vdNArNW9sE+cAGdwss1ETSb3P9ihjcSbFBQitAMs7RX/avXtGAYRORhuhHZA=="; 
-# container = "strata2018";
 container = "tutorial";
 BLOB_URL_BASE = paste0("https://", storageAccount, ".blob.core.windows.net/", container, '/');
 
@@ -396,7 +396,7 @@ lookslike <- find_L1_closest(caltech_df, knots_df[WHICH_KNOT, ])
 showurl(lookslike$url)
 # All the knots look like a coin....
 
-WHICH_FACE=21
+WHICH_FACE=17
 showurl(faces_small_df[WHICH_FACE,"url"])
 
 lookslike <- find_L1_closest(caltech_df, faces_small_df[WHICH_FACE, ])

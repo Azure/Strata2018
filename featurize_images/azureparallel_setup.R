@@ -6,10 +6,6 @@ install.packages(c("devtools", "dplyr", "tidyr", "ggplot2", "magrittr", "digest"
 devtools::install_github("Azure/rAzureBatch")
 devtools::install_github("Azure/doAzureParallel")
 
-# CRAN prerequisities for AzureSMR
-install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
-devtools::install_github("Microsoft/AzureSMR");
-
 ####################################################################################################
 # If you haven't yet, you should follow the instructions at https://github.com/Azure/doAzureParallel
 # to set up the Azure Batch account. Note that it can take a few minutes to create a batch account. 
