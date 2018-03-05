@@ -26,8 +26,7 @@ devtools::install_github("Microsoft/AzureSMR");
 ## Data locations, names, keys...
 
 storageAccount = "storage4tomasbatch";
-# for listing, rotate key after tutorial
-storageKey = "WpJqUKKq+8dgOGIXNlubRVrLu6vdNArNW9sE+cAGdwss1ETSb3P9ihjcSbFBQitAMs7RX/avXtGAYRORhuhHZA=="; 
+source("secrets.R") # get the account key
 container = "tutorial";
 BLOB_URL_BASE = paste0("https://", storageAccount, ".blob.core.windows.net/", container, '/');
 
