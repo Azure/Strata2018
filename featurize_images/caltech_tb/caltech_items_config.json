@@ -1,7 +1,7 @@
 {
   "embeddings": [
     {
-      "tensorName": "Caltech Items Embeddings",
+      "tensorName": "Caltech 256 Items Embeddings",
       "tensorShape": [
         5000,
         512
