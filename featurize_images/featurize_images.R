@@ -1,4 +1,8 @@
 ## This script featurizes a large number of images, on Azure Batch
+#
+# * Subset of the 'faces' dataset
+# * The wood knots dataset
+# * The Caltech256 dataset
 
 ##########################################################################################
 #### Environment setup
@@ -9,14 +13,18 @@ install.packages(c("devtools", "curl", "httr", "imager"));
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
 devtools::install_github("Microsoft/AzureSMR");
 
-# Participants: Add Microsoft goodness to path on the DSVMs
+# Participants: Add Microsoft goodness to path on the DSVMs.
+#
+# Execute in the DSVM terminal: 
+# sudo echo "r-libs-user=/data/mlserver/9.2.1/libraries/RServer" >>/etc/rstudio/rsession.conf
+#
+# This adds the RServer libraries to path for all sessions, including those spawned for parallel local.
 #
 # .libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
 # library(RevoScaleR)
 # library(MicrosoftML)
-#
-# The other method is to edit the config file before starting rstudio-server:
-# sudo echo r-libs-user=/data/mlserver/9.2.1/libraries/RServer >>/etc/rstudio/rsession.conf
+
+
 
 
 # Now follow azureparallel_setup to start a Batch cluster.
@@ -83,7 +91,7 @@ get_blob_info <- function(storageAccount, storageKey, container, prefix) {
 parallel_kernel <- function(blob_info) {
   
   # this ensures we will find the RServer libs on the DSVM
-  RSERVER_LIBS="/opt/microsoft/rclient/3.4.1/libraries/RServer";
+  RSERVER_LIBS="/data/mlserver/9.2.1/libraries/RServer";
   if (!(RSERVER_LIBS %in% .libPaths() ) ) {
    .libPaths( c(RSERVER_LIBS, .libPaths()))
   }
@@ -104,14 +112,14 @@ parallel_kernel <- function(blob_info) {
   }
   
   blob_info$localname <- paste(DATA_DIR, sep='/', blob_info$fname);
-  # print(blob_info$localname)
   
+  # featurize using the rx-functions
   image_features <- rxFeaturize(data = blob_info,
                                 mlTransforms = list(loadImage(vars = list(Image = "localname")),
                                                     resizeImage(vars = list(ResImage = "Image"),
                                                                 width = 224, height = 224),
-                                                    extractPixels(vars = list(Pixels = "ResImage"))
-                                                    , featurizeImage(var = "Pixels", dnnModel = 'resnet18')
+                                                    extractPixels(vars = list(Features = "ResImage"))
+                                                    , featurizeImage(var = "Features", dnnModel = 'resnet18')
                                                     ),
                                 mlTransformVars = c("localname"))
   
@@ -119,34 +127,15 @@ parallel_kernel <- function(blob_info) {
   return(image_features)
 }
 
-##########################################################################################
-#### Run the parallel kernel
-
-BATCH_SIZE = 27;                            # 27 is two tasks per node on small dataset and small cluster
-# 14 is one tasks per node on small dataset and big cluster
-# larger batch size for larger dataset will defray overhead
-NO_BATCHES = ceiling(nrow(blob_info)/BATCH_SIZE);
-
-
-#### cluster execution
-start_time <- Sys.time()
-results <- foreach(i=1:NO_BATCHES ) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
-  N = nrow(blob_info);
-  fromRow = (i-1)*BATCH_SIZE+1;
-  toRow = min(i*BATCH_SIZE, N);
-  parallel_kernel(blob_info[fromRow:toRow,])
-}
-end_time <- Sys.time()
-print(paste0("Ran for ", as.numeric(end_time - start_time, units="secs"), " seconds"))
 
 ##########################################################################################
 ## Splitting the dataset for parallel run
 
-# returns a list of data frame shards (smaller data frames), each enclosed in one-element list
+# Returns a list of data frame shards (smaller data frames), each enclosed in one-element list
 #
-# Parallel execution expects a list of argument vectors. Since parallel_kernel has 1 argument,
-# each argument vector has length one. That is the "extra" layer of list.
-#
+# Note: Parallel execution expects a list of argument vectors. 
+#       Since parallel_kernel has 1 argument, each argument vector has length one. 
+#       That is the "extra" layer of list.
 shardDataFrame <- function(df, shardcount) {
   N <- dim(df)[1]  
   batch_size <- ceiling(N/shardcount);
@@ -154,7 +143,7 @@ shardDataFrame <- function(df, shardcount) {
   shards <- lapply(1:shardcount, function(i) {
     fromRow = (i-1)*batch_size+1;
     toRow = min(i*batch_size, N);  
-    return(list(df[fromRow:toRow,]));
+    return(list(df[fromRow:toRow,])); # extra list()
   } )
 }
 
@@ -171,16 +160,19 @@ output <- parallel_kernel(blob_info);
 end_time <- Sys.time()
 print(paste0("Local ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 
-SLOTS=4 # parallelism level. We have 4 nodes. They have 8 cores each, but workload is multithreaded.
+
+
+SLOTS=4 # parallelism level. We have 4 codes. 
 shards <- shardDataFrame(blob_info, SLOTS)      # create a list of dataframes, a uniform partition of blob_info
 
 # Option 1: run the featurization locally on singlecore
 rxSetComputeContext(RxLocalSeq());
 start_time <- Sys.time()
-outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
+outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards) # list of task outputs
 end_time <- Sys.time()
 print(paste0("Local sequential ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 ## The sharding adds about 3 seconds to serial execution
+
 
 
 # Option 2: run the featurization locally on multicore
@@ -193,9 +185,18 @@ print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, 
 ## Actually slower. There is no benefit of parallelizing a multithreaded workload here, just overhead.
 
 
-# Option 3: Run the featurization in a Spark cluster
+# Option 3: Run the featurization on Azure Batch
+start_time <- Sys.time()
+outputs <- foreach(shard=shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
+  parallel_kernel(shard[[1]]) # shards are argument 1-tuples, kernel takes the element of the 1-tuple
+}
+end_time <- Sys.time()
+print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+
+
+
+# Option 4: Run the featurization in a Spark cluster
 #
-#  locally when running in the cluster's RStudio Server
 # mySparkCluster <- rxSparkConnect()
 #
 # run the featurization on the cluster
@@ -204,15 +205,6 @@ print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, 
 # outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
 # end_time <- Sys.time()
 # print(paste0("Spark ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
-
-# Option 4: Run the featurization on Azure Batch, cheaper than the Spark cluster
-start_time <- Sys.time()
-outputs <- foreach(shard=shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
-  parallel_kernel(shard[[1]]) # shards are argument 1-tuples, kernel takes the element of the 1-tuple
-}
-end_time <- Sys.time()
-print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
-
 
 # the output is a list of length SLOTS, collect back into one dataframe
 faces_small_df <- Reduce(rbind, outputs)
@@ -224,16 +216,18 @@ faces_small_df <- Reduce(rbind, outputs)
 library(tidyr)
 library(ggplot2)
 library(magrittr)
-features <- single_df %>% gather(featname, featval, -bname, -pname)        # plot features by file
+faces_small_df$pname <- blob_info$pname
+faces_small_df$bname <- blob_info$bname
+features <- faces_small_df %>% gather(featname, featval, -pname)    # plot features by file
 plottable <- features[startsWith(features$featname, 'Feature'),];
 plottable$featval <- type.convert(plottable$featval);                       # make numeric again
-
 (
   p <- ggplot(plottable, aes(featname, pname)) + 
     geom_tile(aes(fill = featval), colour = "white") +
-    scale_fill_gradient(low = "white",high = "steelblue")
+    scale_fill_gradient(low = "white", high = "steelblue")
 )
 
+##########################################################################################
 ##########################################################################################
 ## Featurize the Caltech dataset
 
@@ -279,6 +273,7 @@ get_caltech_info <- function(storageAccount, storageKey, container, prefix) {
   return(blob_info);
 }
 
+
 ### load or make featurized data, on Azure Batch
 if( file.exists(CALTECH_FEATURIZED_DATA)){
   
@@ -288,7 +283,7 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
 
   caltech_info <- get_caltech_info(storageAccount, storageKey, container, prefix = "256_ObjectCategories");
   
-  SLOTS = 25
+  SLOTS = 96
   caltech_shards <- shardDataFrame(caltech_info, SLOTS)
   start_time <- Sys.time()
   outputs <- foreach(shard=caltech_shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
@@ -297,13 +292,14 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
   end_time <- Sys.time()
   print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
   caltech_df <- Reduce(rbind, outputs)
+  caltech_df$cname <- caltech_df$cname;
  
   saveRDS(caltech_df, CALTECH_FEATURIZED_DATA);
 }
 
 
 ##########################################################################################
-## Knots dataset
+## Wood knots dataset
 
 ### load or make featurized data, on local multicore
 if( file.exists(KNOTS_FEATURIZED_DATA)){
@@ -314,10 +310,10 @@ if( file.exists(KNOTS_FEATURIZED_DATA)){
   
   knots_info <- get_blob_info(storageAccount, storageKey, container, prefix = "knot_images_png");
 
-  # Featurize Caltech on my 6 local cores  
+  # Just use my 4 local cores
   SLOTS=4 
   rxOptions(numCoresToUse=SLOTS);
-  rxSetComputeContext(RxLocalParallel());
+  rxSetComputeContext(RxLocalSeq());
 
   knots_shards <- shardDataFrame(knots_info, SLOTS);      # create a list of dataframes, a uniform partition of blob_info
   start_time <- Sys.time()
@@ -375,7 +371,6 @@ showurl <- function(url) {
   if(!dir.exists(DATA_DIR)) dir.create(DATA_DIR);
   
   targetfile <- file.path(DATA_DIR, urlpieces[[length(urlpieces)]]);
-  print(targetfile)
   
   download.file(url, destfile = targetfile, mode="wb");
   i <- load.image(targetfile)
@@ -402,6 +397,3 @@ lookslike <- find_L1_closest(caltech_df, faces_small_df[WHICH_FACE, ])
 showurl(lookslike$url)
 
 # OMG that lookup was slow.... Hey, I have a cluster!
-
-
-
