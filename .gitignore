@@ -287,3 +287,6 @@ __pycache__/
 *.odx.cs
 *.xsd.cs
 /featurize_images/localdata
+/featurize_images/Caltech.Rds
+/featurize_images/knots.Rds
+*.bak

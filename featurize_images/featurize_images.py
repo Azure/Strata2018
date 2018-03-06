@@ -13,7 +13,7 @@ The steps we want:
 # identify where the data is
 
 storageAccount = "storage4tomasbatch";
-storageKey = "WpJqUKKq+8dgOGIXNlubRVrLu6vdNArNW9sE+cAGdwss1ETSb3P9ihjcSbFBQitAMs7RX/avXtGAYRORhuhHZA==";
+from secrets import storageKey;
 container = "tutorial";
 blob_url_base = "https://{}.blob.core.windows.net/{}/".format(storageAccount, container);
 
