@@ -9,6 +9,7 @@ Open a bash terminal window in JupyterHub by clicking the New button and then cl
 
 In the terminal, run these four commands:
 
+```bash
 cd ~/notebooks
 
 git clone https://github.com/Azure/Strata2018
@@ -16,6 +17,7 @@ git clone https://github.com/Azure/Strata2018
 cd Strata2018
 
 source startup.sh
+```
 
 You can now log in to RStudio Server at http://hostname:8787 (unlike JupyterHub, be sure to use http, not https).
 

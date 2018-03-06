@@ -77,7 +77,37 @@ plot_roc_history <- function(initial_results, results_history){
   }
 }
 
-plot_probability_distributions <- function(res, title)
+plot_probability_distributions <- function(res, title){
   res$test_predictions %>% 
   ggplot(aes(x=Probability, fill=flagged)) + 
   geom_density(bw=0.01, alpha=0.5)
+}
+
+run_ngram_learning_curve <- function(seed, ts_sizes, training_candidates, test_set){
+  set.seed(seed)
+  initial_training_set_ids <- sample(training_candidates$rev_id, ts_sizes[[1]])
+  training_set_ids <- initial_training_set_ids
+  
+  train_with_additional_cases <- function(num_new_cases){
+    new_ids <- sample(setdiff(training_candidates$rev_id, training_set_ids), num_new_cases)
+    training_set_ids <<- c(training_set_ids, new_ids) 
+    
+    random_training_set <- training_candidates %>% filter(rev_id %in% training_set_ids)
+    
+    model <- rxFastTrees(is_attack ~ ngrams, random_training_set, type="binary",
+                         mlTransforms = list(
+                           featurizeText(vars = c(ngrams = "comment"),
+                                         wordFeatureExtractor = ngramCount(ngramLength = 2, weighting="tfidf"),
+                                         charFeatureExtractor = ngramCount(ngramLength=3))))
+    pred <- rxPredict(model, data=test_set, extraVarsToWrite="is_attack")
+    with(pred, data.frame(tss=nrow(random_training_set), accuracy=sum(PredictedLabel==is_attack)/nrow(test_set), auc=rxAuc(rxRoc("is_attack", "Probability", pred))))
+    
+  }
+  
+  performance_list <- lapply(c(0, diff(ts_sizes)), train_with_additional_cases)
+  
+  performance_df <- bind_rows(performance_list)
+  performance_df$ts_sizes <- ts_sizes # to double check against tss
+  performance_df$seed <- seed
+  performance_df
+}

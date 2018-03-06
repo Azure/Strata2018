@@ -1,13 +1,16 @@
 ---
 title: "Assessment of User Labels"
 author: "Bob Horton"
-date: "November 22, 2017"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
+.libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
+library(RevoScaleR)
+library(MicrosoftML)
+
+# library(knitr)
 knitr::opts_chunk$set(echo = FALSE, cache=FALSE, message=FALSE)
-library(knitr)
 rxOptions(reportProgress=0)
 ```
 
@@ -21,7 +24,7 @@ Here we add the labels provided by each user to the initial training set and ass
 library(dplyr)
 library(pROC)
 library(ggplot2)
-library(knitr)
+# library(knitr)
 
 ### Meta-hyperparameters ###
 set.seed(1)  ###
@@ -35,13 +38,13 @@ INITIAL_EXAMPLES_PER_CLASS <- 6  # cases from the labelled dataset used to train
 KNOT_CLASSES <- setNames(nm=c("sound_knot", "dry_knot", "encased_knot"))
 
 LABELLED_FEATURIZED_DATA <- "labelled_knots_featurized_resnet18.Rds"
-UNLABELLED_FEATURIZED_DATA <- "unlabelled_knots_featurized_resnet18.Rds"
+UNLABELLED_FEATURIZED_DATA <- "data/unlabelled_knots_featurized_resnet18.Rds"
 
 unlabelled_knot_data_df <- readRDS(UNLABELLED_FEATURIZED_DATA)
 # labelled_knot_data_df <- readRDS(LABELLED_FEATURIZED_DATA)
 
-TEST_SET <- readRDS("test_set.Rds")
-INITIAL_TRAINING_SET <- readRDS("initial_training_set.Rds")
+TEST_SET <- readRDS("data/test_set.Rds")
+INITIAL_TRAINING_SET <- readRDS("data/initial_training_set.Rds")
 
 inputs <- grep("^Feature", names(INITIAL_TRAINING_SET), value=TRUE)
 outcome <- "knot_class"
@@ -85,6 +88,7 @@ sql <- function(q) sqlQuery(dbhandle, q) # same syntax as sqldf
                           FROM UserKnotLabel ukl JOIN Label ON ukl.labelid = Label.label_id
                             WHERE ukl.labeltime > DATEADD(HH,-1, GETDATE())
                             ORDER BY user_id, ukl.labeltime"))
+
 
 # To select cases from a particular time range, use a Where clause like this
   # WHERE ukl.labeltime > CONVERT(datetime, '2017-11-22 04:45:00', 120)
