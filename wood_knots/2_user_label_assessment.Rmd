@@ -6,6 +6,10 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
+.libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
+library(RevoScaleR)
+library(MicrosoftML)
+
 knitr::opts_chunk$set(echo = FALSE, cache=FALSE, message=FALSE)
 library(knitr)
 rxOptions(reportProgress=0)

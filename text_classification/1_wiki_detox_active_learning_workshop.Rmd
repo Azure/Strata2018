@@ -11,6 +11,10 @@ params:
 ---
 
 ```{r setup, include=FALSE}
+.libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
+library(RevoScaleR)
+library(MicrosoftML)
+
 knitr::opts_chunk$set(echo=TRUE, cache=FALSE, message=FALSE, warning=FALSE, fig.height=7.5)
 rxOptions(reportProgress=0)
 ```

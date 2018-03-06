@@ -1,1 +1,1 @@
-secret <- list(Uid="jichang@jichangserver", Pwd="J1ngChang")
+secret <- list(Uid="user_id", Pwd="password")

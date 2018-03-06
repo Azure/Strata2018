@@ -8,6 +8,9 @@
 # We have converted all of the individual knot images to PNG format, and in this script we download zip files containing PNG versions
 # of the labelled images and the segmented unlabelled images from Azure blob storage.
 
+.libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
+library(RevoScaleR)
+library(MicrosoftML)
 
 DATA_DIR <- file.path(getwd(), 'data')
 
