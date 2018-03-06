@@ -13,4 +13,4 @@ tensorboard --logdir=log
 
 Now naviate to `http://hostname:6006`.
 
-Alternatively, you can upload the datasets in `Strata2018/featurize_images/caltech_db` to the [online tensorflow projector](http://projector.tensorflow.org/) and visualize it in your browser locally.
+Alternatively, you can upload the datasets in `Strata2018/featurize_images/caltech_db` to the [online tensorflow projector](http://projector.tensorflow.org/) and visualize it in your browser locally, or simply [follow this link](http://projector.tensorflow.org/?config=https://raw.githubusercontent.com/Azure/Strata2018/master/featurize_images/caltech_tb/caltech_items_config.json).
