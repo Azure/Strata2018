@@ -11,7 +11,7 @@ params:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo=TRUE, cache=TRUE, message=FALSE, warning=FALSE, fig.height=7.5)
+knitr::opts_chunk$set(echo=TRUE, cache=FALSE, message=FALSE, warning=FALSE, fig.height=7.5)
 rxOptions(reportProgress=0)
 ```
 
@@ -25,7 +25,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 library(pROC)
-library(fastcluster)  # overwrites hclust
+# library(fastcluster)  # overwrites hclust
 
 source("active_learning_lib.R")
 
@@ -208,20 +208,20 @@ iteration_performance <- do.call("rbind", lapply(iteration_results, function(ire
 ```{r active_vs_passive_learning_curves}
 get_random_training_set_performance <- function(ts_sizes){
   random_training_set <- initial_training_set
-  
+
   random_training_set_results <- lapply(c(0,diff(ts_sizes)), function(tss){
     new_ids <- sample(setdiff(unlabeled_data_df$rev_id, random_training_set$rev_id), tss)
     new_cases <- unlabeled_data_df %>% filter(rev_id %in% new_ids)
     random_training_set <<- rbind(random_training_set, new_cases)
     fit_and_evaluate_model(random_training_set)
   })
-  
-  random_ts_performance <- random_training_set_results %>% 
-    lapply("[[", "performance") %>% 
+
+  random_ts_performance <- random_training_set_results %>%
+    lapply("[[", "performance") %>%
     do.call(bind_rows, .)
-  
+
   random_ts_performance$sample_selection_mode <- "random"
-  
+
   random_ts_performance
 }
 
@@ -237,6 +237,7 @@ if (file.exists(RANDOM_TS_PERFORMANCE_FILE)){
     rtsp$group <- i
     rtsp
   })
+
   saveRDS(random_ts_performance_list, RANDOM_TS_PERFORMANCE_FILE)
 }
 
