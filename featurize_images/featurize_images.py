@@ -2,10 +2,10 @@
 # Chapter 1: Using microsoftml to featurize images
 
 """
-The steps we want:
+The steps:
 1) List the contents of the blob using Azure Python SDK into a dataframe
 2) Run the featurize function locally
-3) Run the featurize function on Spark.
+3) Run the featurize function on Azure Batch
 """
 
 
@@ -91,16 +91,3 @@ featcolumns = [c for c in feat.columns if str.startswith(c,'Features')]
 feat = allfeat[featcolumns]
 plt.imshow(feat, cmap='hot')
 plt.show()
-
-##########################################################################################
-# Chapter 2: Using revoscalepy to bring that featurization to Spark.
-
-"""
-The steps we want:
-4) Place the dataset in the Spark cluster's local HDFS storage
-5) Define a Spark compute context
-6) Rewrite the "parallel kernel function" so that it does not depend on downloading 
-   the data on the local node using python code.
-7) Run the featurize function on Spark and get back a featurized dataframe
-"""
-

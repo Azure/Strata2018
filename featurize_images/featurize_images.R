@@ -8,6 +8,10 @@
 #### Environment setup
 
 install.packages(c("devtools", "curl", "httr", "imager"));
+install.packages(c("dplyr", "tidyr", "ggplot2", "magrittr", "digest", "RCurl", "foreach"));
+
+devtools::install_github("Azure/rAzureBatch")
+devtools::install_github("Azure/doAzureParallel")
 
 # CRAN prerequisities for AzureSMR
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
@@ -15,17 +19,16 @@ devtools::install_github("Microsoft/AzureSMR");
 
 # Participants: Add Microsoft goodness to path on the DSVMs.
 #
-# Execute in the DSVM terminal: 
+# After installing all other packages, execute in the DSVM terminal: 
+# 
+# sudo systemctl start rstudio-server
 # sudo echo "r-libs-user=/data/mlserver/9.2.1/libraries/RServer" >>/etc/rstudio/rsession.conf
-#
+# 
 # This adds the RServer libraries to path for all sessions, including those spawned for parallel local.
 #
 # .libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
 # library(RevoScaleR)
 # library(MicrosoftML)
-
-
-
 
 # Now follow azureparallel_setup to start a Batch cluster.
 
@@ -292,7 +295,7 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
   end_time <- Sys.time()
   print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
   caltech_df <- Reduce(rbind, outputs)
-  caltech_df$cname <- caltech_df$cname;
+  caltech_df$cname <- caltech_info$cname;
  
   saveRDS(caltech_df, CALTECH_FEATURIZED_DATA);
 }
@@ -383,17 +386,17 @@ library(imager)
 library(dplyr)
 
 # show a woodknot
-WHICH_KNOT=10
+WHICH_KNOT=1
 showurl(knots_df[WHICH_KNOT,"url"])
 
 lookslike <- find_L1_closest(caltech_df, knots_df[WHICH_KNOT, ])
 showurl(lookslike$url)
-# All the knots look like a coin....
 
-WHICH_FACE=17
+
+WHICH_FACE=1
 showurl(faces_small_df[WHICH_FACE,"url"])
 
 lookslike <- find_L1_closest(caltech_df, faces_small_df[WHICH_FACE, ])
 showurl(lookslike$url)
 
-# OMG that lookup was slow.... Hey, I have a cluster!
+# OMG that lookup was slow.... Hey, I have a cluster! :)
