@@ -7,7 +7,7 @@ We can now visualize the featurized images by projecting onto 2 - 3 dimensions u
 
 ```bash
 source activate py35
-cd ~/Strata2018/featurize_images/
+cd ~/Strata2018/notebooks/featurize_images/
 tensorboard --logdir=log
 ```
 
