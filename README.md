@@ -7,7 +7,7 @@ Log in to JupyterHub by pointing your web browser to https://hostname:8000 (be s
 
 Open a bash terminal window in JupyterHub by clicking the New button and then clicking Terminal.
 
-In the terminal, run these commands:
+In the terminal, run these four commands:
 
 cd ~/notebooks
 
