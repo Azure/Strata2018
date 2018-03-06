@@ -283,7 +283,7 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
 
   caltech_info <- get_caltech_info(storageAccount, storageKey, container, prefix = "256_ObjectCategories");
   
-  SLOTS = 25
+  SLOTS = 96
   caltech_shards <- shardDataFrame(caltech_info, SLOTS)
   start_time <- Sys.time()
   outputs <- foreach(shard=caltech_shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
@@ -292,6 +292,7 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
   end_time <- Sys.time()
   print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
   caltech_df <- Reduce(rbind, outputs)
+  caltech_df$cname <- caltech_df$cname;
  
   saveRDS(caltech_df, CALTECH_FEATURIZED_DATA);
 }
@@ -396,25 +397,3 @@ lookslike <- find_L1_closest(caltech_df, faces_small_df[WHICH_FACE, ])
 showurl(lookslike$url)
 
 # OMG that lookup was slow.... Hey, I have a cluster!
-
-
-
-##########################################################################################
-#### Run the parallel kernel
-
-BATCH_SIZE = 27;                            # 27 is two tasks per node on small dataset and small cluster
-# 14 is one tasks per node on small dataset and big cluster
-# larger batch size for larger dataset will defray overhead
-NO_BATCHES = ceiling(nrow(blob_info)/BATCH_SIZE);
-
-
-#### cluster execution
-start_time <- Sys.time()
-results <- foreach(i=1:NO_BATCHES ) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
-  N = nrow(blob_info);
-  fromRow = (i-1)*BATCH_SIZE+1;
-  toRow = min(i*BATCH_SIZE, N);
-  parallel_kernel(blob_info[fromRow:toRow,])
-}
-end_time <- Sys.time()
-print(paste0("Ran for ", as.numeric(end_time - start_time, units="secs"), " seconds"))
