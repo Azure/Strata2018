@@ -292,3 +292,4 @@ __pycache__/
 *.bak
 /featurize_images/.Rhistory
 /featurize_images/.RData
+/featurize_images/151.rds
