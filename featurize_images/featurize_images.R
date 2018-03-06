@@ -1,23 +1,32 @@
-## This script featurizes a large number of images, using the FACES dataset, on Spark
+## This script featurizes a large number of images, on Azure Batch
 
 ##########################################################################################
 #### Environment setup
 
-install.packages(c("devtools", "curl", "httr"));
+install.packages(c("devtools", "curl", "httr", "imager"));
 
 # CRAN prerequisities for AzureSMR
 install.packages(c('assertthat', 'XML', 'base64enc', 'shiny', 'miniUI', 'DT', 'lubridate'));
 devtools::install_github("Microsoft/AzureSMR");
 
-library(AzureSMR)   # AzureSMR is only needed on the head node - to list files in blob
+# Participants: Add Microsoft goodness to path on the DSVMs
+#
+# .libPaths( c( "/data/mlserver/9.2.1/libraries/RServer", .libPaths()))
+# library(RevoScaleR)
+# library(MicrosoftML)
+#
+# The other method is to edit the config file before starting rstudio-server:
+# sudo echo r-libs-user=/data/mlserver/9.2.1/libraries/RServer >>/etc/rstudio/rsession.conf
+
+
+# Now follow azureparallel_setup to start a Batch cluster.
 
 
 ##########################################################################################
 ## Data locations, names, keys...
 
 storageAccount = "storage4tomasbatch";
-storageKey = "WpJqUKKq+8dgOGIXNlubRVrLu6vdNArNW9sE+cAGdwss1ETSb3P9ihjcSbFBQitAMs7RX/avXtGAYRORhuhHZA==";
-# container = "strata2018";
+source("secrets.R") # get the account key
 container = "tutorial";
 BLOB_URL_BASE = paste0("https://", storageAccount, ".blob.core.windows.net/", container, '/');
 
@@ -25,9 +34,11 @@ CALTECH_FEATURIZED_DATA='Caltech.Rds'
 KNOTS_FEATURIZED_DATA='knots.Rds'
 FACES_SMALL_FEATURIZED_DATA='faces_small.Rds'
 
-
 ##########################################################################################
 ## list blob contents in a single directory and parse it into constituent parts
+
+library(AzureSMR)   # AzureSMR is only needed on the head node - to list files in blob
+
 get_blob_info <- function(storageAccount, storageKey, container, prefix) {
     marker = NULL;
     blob_info = NULL;
@@ -66,11 +77,17 @@ get_blob_info <- function(storageAccount, storageKey, container, prefix) {
 }
 # end get_blob_info
 
+
 ##########################################################################################
 # Parallel kernel for featurization
-
 parallel_kernel <- function(blob_info) {
   
+  # this ensures we will find the RServer libs on the DSVM
+  RSERVER_LIBS="/opt/microsoft/rclient/3.4.1/libraries/RServer";
+  if (!(RSERVER_LIBS %in% .libPaths() ) ) {
+   .libPaths( c(RSERVER_LIBS, .libPaths()))
+  }
+
   library(MicrosoftML)
   library(utils)
   
@@ -81,25 +98,46 @@ parallel_kernel <- function(blob_info) {
   # do this in paralell, too
   for (i in 1:nrow(blob_info)) {
     targetfile <- file.path(DATA_DIR, blob_info$fname[[i]]);
-    download.file(blob_info$url[[i]], destfile = targetfile, mode="wb")
+    if (!file.exists(targetfile)) {
+      download.file(blob_info$url[[i]], destfile = targetfile, mode="wb")
+    }
   }
   
   blob_info$localname <- paste(DATA_DIR, sep='/', blob_info$fname);
+  # print(blob_info$localname)
   
   image_features <- rxFeaturize(data = blob_info,
                                 mlTransforms = list(loadImage(vars = list(Image = "localname")),
-                                                    resizeImage(vars = list(Features = "Image"),
-                                                                width = 224, height = 224,
-                                                                resizingOption = "IsoPad"),
-                                                    extractPixels(vars = "Features"),
-                                                    featurizeImage(var = "Features",
-                                                                   dnnModel = 'resnet18')),
-                                mlTransformVars = c("localname"),
-                                reportProgress=1)
+                                                    resizeImage(vars = list(ResImage = "Image"),
+                                                                width = 224, height = 224),
+                                                    extractPixels(vars = list(Pixels = "ResImage"))
+                                                    , featurizeImage(var = "Pixels", dnnModel = 'resnet18')
+                                                    ),
+                                mlTransformVars = c("localname"))
   
   image_features$url <- blob_info$url;
   return(image_features)
 }
+
+##########################################################################################
+#### Run the parallel kernel
+
+BATCH_SIZE = 27;                            # 27 is two tasks per node on small dataset and small cluster
+# 14 is one tasks per node on small dataset and big cluster
+# larger batch size for larger dataset will defray overhead
+NO_BATCHES = ceiling(nrow(blob_info)/BATCH_SIZE);
+
+
+#### cluster execution
+start_time <- Sys.time()
+results <- foreach(i=1:NO_BATCHES ) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
+  N = nrow(blob_info);
+  fromRow = (i-1)*BATCH_SIZE+1;
+  toRow = min(i*BATCH_SIZE, N);
+  parallel_kernel(blob_info[fromRow:toRow,])
+}
+end_time <- Sys.time()
+print(paste0("Ran for ", as.numeric(end_time - start_time, units="secs"), " seconds"))
 
 ##########################################################################################
 ## Splitting the dataset for parallel run
@@ -122,42 +160,58 @@ shardDataFrame <- function(df, shardcount) {
 
 
 ##########################################################################################
-## Featurize the faces dataset on a Spark cluster
+## Featurize the faces dataset
 
-# Get connection to Spark cluster.
-# 1. locally when running in the cluster's RStudio Server
-mySparkCluster <- rxSparkConnect()
-
-# 2. remotely
-mySparkCluster <- rxSparkConnect(sshUsername='sshuser',
-                                 sshHostname='stratbl;ob_infoa2018.azurehdinsight.net'
-                                 # , private/public key pair needs to be set up 
-                                 )
-
-# HDFS is running on top of blob storage, so contents of the blob is the same as that of HDFS
+# Get the list of images
 blob_info <- get_blob_info(storageAccount, storageKey, container, prefix = "faces_small");
 
-SLOTS=4 # parallelism level. We have 4 nodes. They have 8 cores each, but workload is multithreaded.
+# Version 0: test that things work locally
+start_time <- Sys.time()
+output <- parallel_kernel(blob_info);
+end_time <- Sys.time()
+print(paste0("Local ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 
+SLOTS=4 # parallelism level. We have 4 nodes. They have 8 cores each, but workload is multithreaded.
 shards <- shardDataFrame(blob_info, SLOTS)      # create a list of dataframes, a uniform partition of blob_info
 
-# the first time you do it, you mau see a lot of installation (packages downloading, etc)
-# the next time it should be faster
-
-# run the featurization locally
-rxOptions(numCoresToUse=SLOTS);
+# Option 1: run the featurization locally on singlecore
 rxSetComputeContext(RxLocalSeq());
 start_time <- Sys.time()
 outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
 end_time <- Sys.time()
-print(paste0("Sequential ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+print(paste0("Local sequential ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+## The sharding adds about 3 seconds to serial execution
 
-# run the featurization on the cluster
-rxSetComputeContext(mySparkCluster);
+
+# Option 2: run the featurization locally on multicore
+rxOptions(numCoresToUse=SLOTS);
+rxSetComputeContext(RxLocalParallel());
 start_time <- Sys.time()
 outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
 end_time <- Sys.time()
-print(paste0("Spark ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+## Actually slower. There is no benefit of parallelizing a multithreaded workload here, just overhead.
+
+
+# Option 3: Run the featurization in a Spark cluster
+#
+#  locally when running in the cluster's RStudio Server
+# mySparkCluster <- rxSparkConnect()
+#
+# run the featurization on the cluster
+# rxSetComputeContext(mySparkCluster);
+# start_time <- Sys.time()
+# outputs <- rxExec(FUN=parallel_kernel, elemArgs=shards)
+# end_time <- Sys.time()
+# print(paste0("Spark ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+
+# Option 4: Run the featurization on Azure Batch, cheaper than the Spark cluster
+start_time <- Sys.time()
+outputs <- foreach(shard=shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
+  parallel_kernel(shard[[1]]) # shards are argument 1-tuples, kernel takes the element of the 1-tuple
+}
+end_time <- Sys.time()
+print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
 
 
 # the output is a list of length SLOTS, collect back into one dataframe
@@ -215,15 +269,17 @@ get_caltech_info <- function(storageAccount, storageKey, container, prefix) {
   # preprocess the file names into urls and class (person) names
   blob_info$url <- paste(BLOB_URL_BASE, sep = '', blob_info$name)
   blob_info$fname <- sapply(strsplit(blob_info$name, '/'), function(l) { l[length(l)] })
-  blob_info$bname <- sapply(strsplit(blob_info$fname, ".", fixed = TRUE), function(l) l[1])
-  blob_info$pname <- sapply(strsplit(blob_info$name, '/'), function(l) { 
-                                  strsplit(l[2],'.')[2] # the second part of the "001.ak47" string, which is the second directory
-                            })
+  blob_info$bname <- sapply(strsplit(blob_info$fname, ".", fixed = TRUE), function(l) l[[1]])
+  blob_info$clsid <- sapply(strsplit(blob_info$name, '/'), function(l) { l[2] })
+  blob_info$cname <- sapply(strsplit(blob_info$clsid, ".", fixed = TRUE), 
+                            function(l) { l[2] }
+                            # the second part of the "001.ak47" string, which is the second directory
+                            );
   
   return(blob_info);
 }
 
-### load or make featurized data
+### load or make featurized data, on Azure Batch
 if( file.exists(CALTECH_FEATURIZED_DATA)){
   
   caltech_df <- readRDS(CALTECH_FEATURIZED_DATA)
@@ -231,18 +287,15 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
 } else {
 
   caltech_info <- get_caltech_info(storageAccount, storageKey, container, prefix = "256_ObjectCategories");
-
-  # Featurize Caltech on my 4 available local cores  
   
-  SLOTS=4
-  rxOptions(numCoresToUse=SLOTS);
-  rxSetComputeContext(RxLocalParallel());
-  
-  caltech_shards <- shardDataFrame(caltech_info, SLOTS)      
+  SLOTS = 25
+  caltech_shards <- shardDataFrame(caltech_info, SLOTS)
   start_time <- Sys.time()
-  outputs <- rxExec(FUN=parallel_kernel, elemArgs=caltech_shards)
+  outputs <- foreach(shard=caltech_shards) %dopar% {     # %dopar% invokes parallel backend (registered cluster)
+    parallel_kernel(shard[[1]]) # shards are argument 1-tuples, kernel takes the element of the 1-tuple
+  }
   end_time <- Sys.time()
-  print(paste0("Local parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
+  print(paste0("Azure parallel ran for ", round(as.numeric(end_time - start_time, units="secs")), " seconds"))
   caltech_df <- Reduce(rbind, outputs)
  
   saveRDS(caltech_df, CALTECH_FEATURIZED_DATA);
@@ -252,6 +305,7 @@ if( file.exists(CALTECH_FEATURIZED_DATA)){
 ##########################################################################################
 ## Knots dataset
 
+### load or make featurized data, on local multicore
 if( file.exists(KNOTS_FEATURIZED_DATA)){
   
   knots_df <- readRDS(KNOTS_FEATURIZED_DATA)
@@ -261,7 +315,7 @@ if( file.exists(KNOTS_FEATURIZED_DATA)){
   knots_info <- get_blob_info(storageAccount, storageKey, container, prefix = "knot_images_png");
 
   # Featurize Caltech on my 6 local cores  
-  SLOTS=6 
+  SLOTS=4 
   rxOptions(numCoresToUse=SLOTS);
   rxSetComputeContext(RxLocalParallel());
 
@@ -279,10 +333,75 @@ if( file.exists(KNOTS_FEATURIZED_DATA)){
 
 
 ##########################################################################################
-## Do something clever with it
+## Featurization maps disparate images into the same space
+
+dim(caltech_df)
+dim(knots_df)
+
+# What does this woodknot look like?
+# Find the thing in the Caltech dataset that is the closest in L1 sense and show it.
+# Returns the row from dataset_df that is closest to single_row_df
+# in the L1 sense. Columns must match in dataset_df and single_row_df.
+#
+# This is a table scan. I don't know anything about clever indexing 
+# and table scans sell cloud compute.
+find_L1_closest <- function (dataset_df, single_row_df) {
+  
+  numdf <- dplyr::select_if(dataset_df,is.numeric);
+  single <- dplyr::select_if(single_row_df,is.numeric);
+  
+  N = nrow(numdf);
+  diffs <- sweep(numdf, 2, as.numeric(single), "-");
+  numdf$l1 <- rowSums(abs(diffs));
+  closest <- which(numdf$l1 == min(numdf$l1));
+  
+  return( dataset_df[closest,])
+  
+}
+
+showurl <- function(url) {
+  if (is.list(url)) {
+    if (length(url) > 1) {
+      print("Warning: only one url will be shown")
+    }
+    oneurl <- url[[1]]
+  } else {
+    oneurl <- url;
+  }
+  
+  urlpieces <- strsplit(oneurl, '/')[[1]];
+  
+  DATA_DIR <- file.path(getwd(), 'localdata');
+  if(!dir.exists(DATA_DIR)) dir.create(DATA_DIR);
+  
+  targetfile <- file.path(DATA_DIR, urlpieces[[length(urlpieces)]]);
+  print(targetfile)
+  
+  download.file(url, destfile = targetfile, mode="wb");
+  i <- load.image(targetfile)
+  cls <- urlpieces[length(urlpieces) - 1]
+  plot(i, main=cls)
+}
 
 
+library(imager)
+library(dplyr)
 
+# show a woodknot
+WHICH_KNOT=10
+showurl(knots_df[WHICH_KNOT,"url"])
+
+lookslike <- find_L1_closest(caltech_df, knots_df[WHICH_KNOT, ])
+showurl(lookslike$url)
+# All the knots look like a coin....
+
+WHICH_FACE=17
+showurl(faces_small_df[WHICH_FACE,"url"])
+
+lookslike <- find_L1_closest(caltech_df, faces_small_df[WHICH_FACE, ])
+showurl(lookslike$url)
+
+# OMG that lookup was slow.... Hey, I have a cluster!
 
 
 

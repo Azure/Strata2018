@@ -1,6 +1,27 @@
 
 # Strata 2018 Tutorial on Using R and Python for Scalable Data Science, Machine Learning, and AI
 
+## Instructions
+
+Log in to JupyterHub by pointing your web browser to https://hostname:8000 (be sure to use https, not http, and replace "hostname" with the hostname on the slip of paper you received when arriving at the Tutorial). Please disgregard warnings about certificate errors.
+
+Open a bash terminal window in JupyterHub by clicking the New button and then clicking Terminal.
+
+In the terminal, run these four commands:
+
+cd ~/notebooks
+
+git clone https://github.com/Azure/Strata2018
+
+cd Strata2018
+
+source startup.sh
+
+You can now log in to RStudio Server at http://hostname:8787 (unlike JupyterHub, be sure to use http, not https).
+
+
+## Abstract
+
 Accessed via R and Python APIs, pre-trained Deep Learning models and Transfer Learning are making custom Image Classification with large or small amounts of labeled data easily accessible to data scientists and application developers. This tutorial walks you through creating end-to-end data science solutions in R and Python on virtual machines, Spark environments, and cloud-based infrastructure and consuming them in production. This tutorial covers strategies and best practices for porting and interoperating between R and Python, with a novel Deep Learning use case for Image Classification as an example use case.
 
 The tutorial materials and the scripts that are used to create the virtual machines configured as single-node Spark clusters are published in this GitHub repository, so you’ll be able to create environments identical to the ones you use in the tutorial by running the scripts  after the tutorial session completes.
