@@ -3,6 +3,9 @@
 
 ## Instructions
 
+Provision a CentOS Linux Data Science Virtual Machine; the size "Standard_DS12_v2" works well:
+https://azuremarketplace.microsoft.com/en-us/marketplace/apps/microsoft-ads.linux-data-science-vm?tab=Overview
+
 Log in to JupyterHub by pointing your web browser to https://hostname:8000 (be sure to use https, not http, and replace "hostname" with the hostname on the slip of paper you received when arriving at the Tutorial). Please disgregard warnings about certificate errors.
 
 Open a bash terminal window in JupyterHub by clicking the New button and then clicking Terminal.
